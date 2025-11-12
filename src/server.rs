@@ -1,9 +1,10 @@
 use core::time;
+use std::fs::OpenOptions;
 use std::net::TcpStream;
-use std::sync::mpsc::channel;
+use std::str::from_utf8;
 use std::thread;
-use std::{net::TcpListener, sync::mpsc};
-use std::io::Read;
+use std::{net::TcpListener};
+use std::io::{ErrorKind, Read, Write};
 
 const LOCAL: &str = "127.0.0.1:3000";
 const MSG_SIZE: usize = 32;
@@ -17,15 +18,43 @@ fn create_server () -> TcpListener {
     return listener;
 }
 
-fn handle_connection (mut stream: TcpStream) {
-    let ( sender, _ ) = channel();
-    let client = thread::spawn(move || {
-        let mut buffer = [0; MSG_SIZE];
-        println!("{:?}", sender.send(stream.read_exact(&buffer)))
-    });
+fn append_to_file (msg: &str) {
+    if let Ok(mut file) = OpenOptions::new().append(true).create(true).open("logfile.txt") {
+        if let Err(err) = writeln!(&mut file, "{}", msg){
+            println!("Failed to write message to buffer: {}", err)
+        };
+    }
+}
 
-    println!("Reading...");
-    stream.read_exact(&mut buffer).expect("Failed to parse buffer content");
+// Handle a connection - will print and append message to file
+fn handle_connection (mut stream: TcpStream) {
+    println!("Client connected");
+
+    thread::spawn(move || {
+        let mut buffer = vec![0; MSG_SIZE];
+        loop {
+            match stream.read(&mut buffer) {
+                Ok(len) => {
+                    // If no content was sent
+                    if len == 0 {
+                        break;
+                    }
+
+                    // Format to utf8 and print in console
+                    let msg = from_utf8(&buffer[..len]).expect("Failed to format body");
+                    println!("{}", msg);
+
+                    // We want to save the message in a file
+                    append_to_file(msg);
+                }, 
+                Err(ref err) if err.kind() == ErrorKind::WouldBlock => (),
+                Err(_) => {
+                    break;
+                }
+            }
+        }
+        println!("Disconnected");
+    });
 }
 
 pub fn run() {
