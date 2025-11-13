@@ -1,52 +1,42 @@
-use std::{io::{self, ErrorKind}, net::TcpStream, sync::mpsc, thread};
-use std::io::{Read, Write};
-use std::sync::mpsc::{TryRecvError};
-use std::time::Duration;
+use std::{io::{self}, net::TcpStream, sync::mpsc, thread};
+use std::io::{Write};
+use std::sync::mpsc::{Receiver, Sender};
 
 const LOCAL: &str = "127.0.0.1:3000";
-const MSG_SIZE: usize = 32;
 
-pub fn run() {
-    let mut client = TcpStream::connect(LOCAL).expect("Stream failed to connect");
-    client.set_nonblocking(true).expect("failed to initiate non-blocking");
-
-    let (tx, rx) = mpsc::channel::<String>();
-
+fn handle_send_to_server (rx: Receiver<String>, mut client: TcpStream) {
     thread::spawn(move || loop {
-        let mut buff = vec![0; MSG_SIZE];
-        match client.read_exact(&mut buff) {
-            Ok(_) => {
-                let msg = buff.into_iter().take_while(|&x| x != 0).collect::<Vec<_>>();
-                println!("message recv {:?}", msg);
-            },
-            Err(ref err) if err.kind() == ErrorKind::WouldBlock => (),
-            Err(_) => {
-                println!("connection with server was severed");
-                break;
-            }
+        // Retrieve message from channel and send to
+        // socket/server if not empty
+        let msg = &rx.recv().unwrap();
+        if msg.chars().count() > 0 {
+            write!(client, "{:?}", msg).unwrap();
         }
-
-        match rx.try_recv() {
-            Ok(msg) => {
-                let mut buff = msg.clone().into_bytes();
-                buff.resize(MSG_SIZE, 0);
-                client.write_all(&buff).expect("writing to socket failed");
-                println!("message sent {:?}", msg);
-            }, 
-            Err(TryRecvError::Empty) => (),
-            Err(TryRecvError::Disconnected) => break
-        }
-
-        thread::sleep(Duration::from_millis(100));
     });
+}
 
+fn handle_write_message (tx: Sender<String>) {
     println!("Write a Message:");
+    // Handle write message and send to channel
     loop {
         let mut buff = String::new();
         io::stdin().read_line(&mut buff).expect("reading from stdin failed");
         let msg = buff.trim().to_string();
+
+        // Quit on command or fail
         if msg == ":quit" || tx.send(msg).is_err() {break}
     }
-    println!("bye bye!");
+}
+
+pub fn run() {
+    // Set up client and connect to the server
+    let client = TcpStream::connect(LOCAL).expect("Stream failed to connect");
+    client.set_nonblocking(true).expect("failed to initiate non-blocking");
+
+    // Set up channel to handle messaging between threads 
+    let (tx, rx) = mpsc::channel::<String>();
+
+    handle_send_to_server(rx, client);
+    handle_write_message(tx);
 }
 
